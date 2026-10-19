@@ -435,6 +435,64 @@ check('三个界面路由都挂上了', ['/status', '/save', '/refresh'].every((
 }
 
 {
+  // 模型选择：status 要给出可选清单；保存 exclude 之后，注册出去的模型表里就没有它们了
+  const plain = fakeRes()
+  await handlerFor('/status')(fakeReq(), plain)
+  const plainBody = plain.json()
+  const firstRoute = plainBody?.routes?.[0]
+  check('status 每条路由带完整模型清单（供界面勾选）',
+    Array.isArray(firstRoute?.catalog) && firstRoute.catalog.length === firstRoute.models && typeof firstRoute.catalog[0]?.id === 'string',
+    `catalog=${firstRoute?.catalog?.length} models=${firstRoute?.models}`)
+  check('清单条目带上下文/思考档等要点',
+    typeof firstRoute?.catalog?.[0]?.contextWindow === 'number' && Array.isArray(firstRoute?.catalog?.[0]?.efforts),
+    JSON.stringify(firstRoute?.catalog?.[0]))
+  check('默认没有排除任何模型（全部启用）',
+    Array.isArray(firstRoute?.exclude) && firstRoute.exclude.length === 0 && firstRoute.enabled === firstRoute.models,
+    `exclude=${JSON.stringify(firstRoute?.exclude)} enabled=${firstRoute?.enabled}`)
+
+  const targetId = firstRoute.catalog.find((item) => item.id !== 'cn:deepseek-v4.1-flash')?.id ?? firstRoute.catalog[0].id
+  const res = fakeRes()
+  await handlerFor('/save')(fakeReq({
+    method: 'POST',
+    body: {
+      routes: plainBody.routes.map((route, at) => ({
+        id: route.id,
+        displayName: route.displayName,
+        baseURL: route.baseURL,
+        ...(at === 0 ? { exclude: [targetId, targetId, 42, '', 'x'.repeat(500)] } : {}),
+      })),
+    },
+  }), res)
+  const saved = res.json()
+  const route = saved?.routes?.[0]
+  check('保存 exclude 后 enabled 减少', route?.enabled === route?.models - 1, `enabled=${route?.enabled} models=${route?.models}`)
+  check('exclude 已去重并丢掉非字符串/空串/超长项',
+    JSON.stringify(route?.exclude) === JSON.stringify([targetId]),
+    JSON.stringify(route?.exclude))
+
+  const injected = await (registered?.adapter?.listModels?.('workbuddy2apicn') ?? [])
+  const injectedIds = injected.map((model) => model.id)
+  check('被排除的模型没有进入注册的模型表', !injectedIds.includes(targetId),
+    `排除 ${targetId}；注入 ${injectedIds.length} 个：${injectedIds.slice(0, 3).join(', ')}…`)
+  check('其余模型照常注册', injectedIds.length === firstRoute.models - 1, `注入 ${injectedIds.length} 个，预期 ${firstRoute.models - 1} 个`)
+
+  const after = fakeRes()
+  await handlerFor('/status')(fakeReq(), after)
+  check('status 回显当前排除列表',
+    JSON.stringify(after.json()?.routes?.[0]?.exclude) === JSON.stringify([targetId]),
+    JSON.stringify(after.json()?.routes?.[0]?.exclude))
+
+  // 复位：把排除清掉，后续断言仍然看到全量模型
+  const reset = fakeRes()
+  await handlerFor('/save')(fakeReq({
+    method: 'POST',
+    body: { routes: after.json().routes.map((item) => ({ id: item.id, displayName: item.displayName, baseURL: item.baseURL })) },
+  }), reset)
+  check('清空 exclude 后恢复全部启用', reset.json()?.routes?.[0]?.enabled === reset.json()?.routes?.[0]?.models,
+    `enabled=${reset.json()?.routes?.[0]?.enabled} models=${reset.json()?.routes?.[0]?.models}`)
+}
+
+{
   const before = registrations
   const res = fakeRes()
   await handlerFor('/save')(fakeReq({
@@ -877,8 +935,133 @@ function findTranscriptSwitch(node) {
   check('无 configForms 时开关禁用', findTranscriptSwitch(view)?.props.disabled === true)
 }
 
-// ────────────────────────── 收尾 ──────────────────────────
+console.log('\n[5c] 客户端卡片：模型选择（勾选要启用的模型）')
 
+/** 带模型清单的宿主状态（三条模型，覆盖有/无思考、图片、倍率）。 */
+const selectionStatus = {
+  ok: true,
+  configFile: 'C:/Users/x/.dsh/.workbuddy2api-connect.json',
+  refreshMinutes: 30,
+  updatedAt: '2026-10-19T13:00:00.000Z',
+  routes: [
+    {
+      id: 'workbuddy2apicn',
+      displayName: 'work2api-CN',
+      baseURL: 'http://192.168.1.201:7863/v1',
+      apiKeyEnv: 'WORKBUDDY2APICN_API_KEY',
+      hasKey: true,
+      reasoning: null,
+      models: 3,
+      enabled: 3,
+      exclude: [],
+      fetchedAt: Date.now() - 60_000,
+      source: 'live',
+      error: null,
+      contextMin: 128_000,
+      contextMax: 1_000_000,
+      efforts: ['low', 'high', 'max'],
+      offCount: 1,
+      catalog: [
+        { id: 'cn:deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_000_000, maxTokens: 32_768, reasoning: true, efforts: ['low', 'high', 'max'], off: true, images: false, rate: null },
+        { id: 'cn:glm-5.3-flash', name: 'GLM 5.3 Flash', contextWindow: 128_000, maxTokens: 16_384, reasoning: false, efforts: [], off: false, images: true, rate: null },
+        { id: 'cn:kimi-k3', name: 'Kimi K3', contextWindow: 256_000, maxTokens: 8_192, reasoning: true, efforts: ['high'], off: false, images: false, rate: 'x0.79' },
+      ],
+    },
+  ],
+}
+
+const realFetch = globalThis.fetch
+const selectionCalls = []
+globalThis.fetch = async (url, options) => {
+  selectionCalls.push({ url: String(url), body: options?.body === undefined ? undefined : JSON.parse(options.body) })
+  return { ok: true, status: 200, json: async () => selectionStatus }
+}
+
+/** 按文本找按钮。 */
+function findButton(node, text) {
+  return findNode(node, (candidate) => candidate.type === 'button' && collectText(candidate).join('').includes(text))
+}
+
+/** 收集「模型行」（label 里含 `cn:` 的那些）。 */
+function collectModelRows(node, out = []) {
+  if (node === null || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const child of node) collectModelRows(child, out)
+    return out
+  }
+  if (node.type === 'label' && collectText(node).join(' ').includes('cn:')) out.push(node)
+  for (const child of node.children ?? []) collectModelRows(child, out)
+  return out
+}
+
+/** 模型行 → 它的 checkbox。 */
+const checkboxOf = (label) => findNode(label, (candidate) => candidate.type === 'input' && candidate.props.type === 'checkbox')
+
+{
+  const mount = mountFresh({ get: () => undefined })
+  mount.render({ view: 'page' })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let view = mount.render({ view: 'page' })
+
+  check('默认收起，但标题给出「启用 N / 共 M」', findButton(view, '模型选择（启用 3 / 共 3）') !== undefined,
+    collectText(view).join(' | ').match(/模型选择[^|]*/u)?.[0])
+
+  findButton(view, '模型选择（启用')?.props.onClick()
+  view = mount.render({ view: 'page' })
+  let rows = collectModelRows(view)
+  check('展开后列出全部模型', rows.length === 3, `行数 ${rows.length}`)
+  check('默认全部勾选（exclude 为空）', rows.every((label) => checkboxOf(label)?.props.checked === true))
+  const facts = collectText(view).join(' | ')
+  check('每行标出上下文/思考/图片/倍率', /1000K · 思考 low\/high\/max · 可关/u.test(facts) && /图片/u.test(facts) && /x0\.79/u.test(facts), facts.match(/cn:[^|]+\|[^|]*/u)?.[0])
+
+  // 取消勾选一个模型 → 计入 exclude，标题数字跟着变
+  const glmRow = rows.find((label) => collectText(label).join(' ').includes('cn:glm-5.3-flash'))
+  checkboxOf(glmRow)?.props.onChange({ target: { checked: false } })
+  view = mount.render({ view: 'page' })
+  check('取消勾选后该模型变为未启用', checkboxOf(collectModelRows(view).find((label) => collectText(label).join(' ').includes('cn:glm-5.3-flash')))?.props.checked === false)
+  check('标题计数变为「启用 2 / 共 3」', findButton(view, '模型选择（启用 2 / 共 3）') !== undefined)
+
+  // 保存 → 请求体里带上 exclude
+  findButton(view, '保存并生效')?.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  const saved = selectionCalls.filter((call) => call.url.includes('/save')).at(-1)
+  check('保存把未启用的模型作为 exclude 提交', JSON.stringify(saved?.body?.routes?.[0]?.exclude) === '["cn:glm-5.3-flash"]',
+    JSON.stringify(saved?.body?.routes?.[0]))
+
+  // 全不选 / 全选
+  view = mount.render({ view: 'page' })
+  findButton(view, '模型选择（启用')?.props.onClick()
+  view = mount.render({ view: 'page' })
+  findButton(view, '全不选')?.props.onClick()
+  view = mount.render({ view: 'page' })
+  check('「全不选」后一个都不启用并给出警告', findButton(view, '模型选择（启用 0 / 共 3）') !== undefined && /一个模型都没启用/u.test(collectText(view).join(' | ')))
+  findButton(view, '全选')?.props.onClick()
+  view = mount.render({ view: 'page' })
+  check('「全选」后恢复全部启用', findButton(view, '模型选择（启用 3 / 共 3）') !== undefined)
+
+  // 关键字过滤（此时模型选择区仍是展开状态：保存会把展开状态重置，所以这里不重复点击）
+  view = mount.render({ view: 'page' })
+  const filterInput = findNode(view, (candidate) => candidate.type === 'input' && typeof candidate.props.placeholder === 'string' && candidate.props.placeholder.includes('输入关键字过滤'))
+  check('模型选择里有搜索框', filterInput !== undefined)
+  filterInput?.props.onChange({ target: { value: 'glm' } })
+  view = mount.render({ view: 'page' })
+  check('搜索只留下匹配的模型', collectModelRows(view).length === 1, `行数 ${collectModelRows(view).length}`)
+}
+
+{
+  // 没有模型表时给指引，而不是空白
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => cardStatus })
+  const mount = mountFresh({ get: () => undefined })
+  mount.render({ view: 'page' })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const view = mount.render({ view: 'page' })
+  check('没有模型表时提示先去保存/刷新', /还没有模型表/u.test(collectText(view).join(' | ')), collectText(view).join(' | ').match(/还没有模型表[^|]*/u)?.[0])
+  check('没有模型表时不显示全选/全不选', findButton(view, '全不选') === undefined)
+}
+
+globalThis.fetch = realFetch
+
+// ────────────────────────── 收尾 ──────────────────────────
 console.log('\n— 插件日志 —')
 for (const [level, message] of logs) if (level === 'info' || level === 'warn' || level === 'error') console.log(`  [${level}] ${message}`)
 
