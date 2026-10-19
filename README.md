@@ -98,13 +98,13 @@ DSH 自带的 `@deepseek-ai/dsh-llm-pi-ai` 支持手写网关路由，但在 `co
 
 ```powershell
 # 1) 从 Release 取附件（或自己 npm pack 出来的那个）放进本地插件目录
-copy dsh-workbuddy2api-connect-0.3.0.tgz "$env:USERPROFILE\.dsh\local-plugins\"
+copy dsh-workbuddy2api-connect-0.3.1.tgz "$env:USERPROFILE\.dsh\local-plugins\"
 ```
 
 2) 编辑 `%USERPROFILE%\.dsh\profiles\desktop\package.json` 两处：
 
 - `dependencies` 里加一行
-  `"dsh-workbuddy2api-connect": "file:C:/Users/<你>/.dsh/local-plugins/dsh-workbuddy2api-connect-0.3.0.tgz"`
+  `"dsh-workbuddy2api-connect": "file:C:/Users/<你>/.dsh/local-plugins/dsh-workbuddy2api-connect-0.3.1.tgz"`
 - `dsh.profile.bundles` 数组里追加 `"dsh-workbuddy2api-connect"`
 
 ```powershell
@@ -120,13 +120,13 @@ $dsh = "D:\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"   # 换�
 ### Web / TUI
 
 ```sh
-dsh plugin --profile web add https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/download/v0.3.0/dsh-workbuddy2api-connect-0.3.0.tgz
+dsh plugin --profile web add https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/download/v0.3.1/dsh-workbuddy2api-connect-0.3.1.tgz
 ```
 
 ### 从源码
 
 ```sh
-npm pack                        # → dsh-workbuddy2api-connect-0.3.0.tgz
+npm pack                        # → dsh-workbuddy2api-connect-0.3.1.tgz
 ```
 
 再按上面「桌面版」或「Web / TUI」的方式装上那个 tgz。
@@ -142,6 +142,37 @@ npm pack                        # → dsh-workbuddy2api-connect-0.3.0.tgz
 > ⚠️ `dsh plugin add` 会重写 profile 的 `dsh.profile.bundles`：本机两次升级各丢过别的插件
 > （`dsh-workbuddy-connect`、`@eghrhegpe/dsh-connect-qoder`），而 `install` 从不动配置。
 > 这也是上面推荐手工改配置的原因；用 `add` 的话装完请核对那个列表。
+
+## 兼容性与升级排查（DSH 更新后「不适配」）
+
+DSH 更新后插件消失，实测两种成因，**都不在插件代码里**：
+
+1. **profile 的 `dsh.profile.bundles` 被重置**。更新会重写
+   `~/.dsh/profiles/<profile>/package.json`，bundles 里只剩官方条目，插件的
+   `cordis.patch.yml` 于是根本不生效——看着像「不适配」，其实只是没被加载。
+   把 `"dsh-workbuddy2api-connect"` 加回 `dsh.profile.bundles` 就恢复。
+2. **manifest 的 peer 版本判定**。DSH 用 `evaluatePluginCompatibility` 比对
+   `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer，而 DSH 版本是预发布序列
+   （`0.2.0-rc.2` → `0.2.1-rc.2` → …）。npm semver 对预发布有额外规则：只有 range 里
+   出现**同一个 X.Y.Z 的预发布比较符**，该版本才算满足。所以 `0.2.0-rc.2`、甚至
+   `>=0.2.0-0 <0.3.0` 这种看似宽松的写法都判定不了 `0.2.1-rc.2`。**本插件因此不再声明
+   任何 `@deepseek-ai/dsh-*` peer**——官方自带的插件也都不声明。
+
+自检工具：
+
+```sh
+node tools/check-compat.mjs      # 用 DSH 自己的判定逻辑比对当前运行时；退出码 1 = 不兼容
+node tools/dump-profile.mjs      # 看 profile 实际合成出的 bundle 层与插件条目
+```
+
+实测通过：`dsh 0.2.0-rc.2`（pi-ai 0.87.1）与 `dsh 0.2.1-rc.2`（pi-ai 1.1.0），各 100 项在线核对。
+
+升级后安装还有一个坑：在「`resources/app/` 补丁版」这类部署里，升级后
+`dsh plugin --profile desktop install` 可能报
+`Cannot find module ...\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js`
+（CLI 仍按 asar 布局找入口）。这时不必修 CLI：把依赖与 bundle 条目写进 profile 的
+`package.json`，再把 tgz 解压到 `~/.dsh/profiles/<profile>/node_modules/<包名>/`，
+DSH 一样能解析（本机这次就是这么恢复的）。
 
 ## 配置（cordis 层）
 
@@ -336,7 +367,7 @@ python tools/cut-release.py --notes FILE  # 指定发布说明文件
 - Release 正文 = `docs/release-notes-v<版本>.md` + 自动追加的安装章节（桌面版 / Web / TUI 两条路径）；说明里自己写了 `## 安装` 就不重复追加
 - 附件就是 `npm pack` 出来的 tgz，安装可以直接指它（见上面「Web / TUI」）
 
-已发布版本：**[v0.3.0](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.3.0)**（界面新增「命令与思考：完全展开」开关）、**[v0.2.1](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.2.1)**。tag 指向发布内容那一次提交；之后的文档/工具提交不重打 tag。
+已发布版本：**[v0.3.1](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.3.1)**（适配 dsh 0.2.1-rc.2，去掉 dsh peer 版本钉）、**[v0.3.0](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.3.0)**（界面新增「命令与思考：完全展开」开关）、**[v0.2.1](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.2.1)**。tag 指向发布内容那一次提交；之后的文档/工具提交不重打 tag。
 
 ## 许可
 
