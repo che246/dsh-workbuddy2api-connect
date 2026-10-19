@@ -2,7 +2,7 @@
   "name": "dsh-workbuddy2api-connect",
   "displayName": "DSH WorkBuddy2API Connect",
   "description": "把 WorkBuddy2API 网关的模型目录自动同步进 DeepSeek Harness —— 自动读取模型名、思考档位与最大上下文，并带一个可增删路由（分组名称 / URL / Key）的界面。",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",

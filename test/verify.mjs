@@ -493,6 +493,46 @@ check('三个界面路由都挂上了', ['/status', '/save', '/refresh'].every((
 }
 
 {
+  // /probe：按界面当前的 URL/Key 现拉模型表；失败要把原因说清楚
+  const okProbe = fakeRes()
+  await handlerFor('/probe')(fakeReq({
+    method: 'POST',
+    body: { baseURL: routes[0].baseURL, apiKey: refs['WORKBUDDY2APICN_API_KEY'] },
+  }), okProbe)
+  const okBody = okProbe.json()
+  check('probe 用 URL+Key 拉到模型清单', okBody?.ok === true && Array.isArray(okBody.catalog) && okBody.catalog.length > 0,
+    `models=${okBody?.models} error=${okBody?.error ?? ''}`)
+  check('probe 返回的清单条目同 /status 一样带要点', typeof okBody?.catalog?.[0]?.contextWindow === 'number' && Array.isArray(okBody?.catalog?.[0]?.efforts),
+    JSON.stringify(okBody?.catalog?.[0]))
+  check('probe 回报它请求的地址', typeof okBody?.url === 'string' && okBody.url.endsWith('/models'), okBody?.url)
+
+  const badKey = fakeRes()
+  await handlerFor('/probe')(fakeReq({ method: 'POST', body: { baseURL: routes[0].baseURL, apiKey: 'sk-definitely-wrong' } }), badKey)
+  const badKeyBody = badKey.json()
+  check('probe 遇到密钥错误如实报错（不静默空表）',
+    badKeyBody?.ok === false && /401|invalid_api_key/u.test(badKeyBody?.error ?? ''), badKeyBody?.error)
+
+  const offline = fakeRes()
+  await handlerFor('/probe')(fakeReq({ method: 'POST', body: { baseURL: 'http://127.0.0.1:45999/v1', apiKey: 'x' } }), offline)
+  const offlineBody = offline.json()
+  check('probe 连不上端口时说清是「连不上/端口没监听」',
+    offlineBody?.ok === false && /连不上|ECONNREFUSED/u.test(offlineBody?.error ?? ''), offlineBody?.error)
+
+  const badUrl = fakeRes()
+  await handlerFor('/probe')(fakeReq({ method: 'POST', body: { baseURL: 'ftp://example.com/v1' } }), badUrl)
+  check('probe 拒绝非 http(s) URL', badUrl.statusCode === 400 && /http/u.test(badUrl.json()?.error ?? ''), badUrl.json()?.error)
+
+  const emptyUrl = fakeRes()
+  await handlerFor('/probe')(fakeReq({ method: 'POST', body: { baseURL: '   ' } }), emptyUrl)
+  check('probe 没填 URL 时提示先填 URL', emptyUrl.statusCode === 400 && /请先填 URL/u.test(emptyUrl.json()?.error ?? ''), emptyUrl.json()?.error)
+
+  // 既有路由：不带 apiKey，按凭据名从库里取已保存的那把
+  const stored = fakeRes()
+  await handlerFor('/probe')(fakeReq({ method: 'POST', body: { id: 'workbuddy2apicn', baseURL: routes[0].baseURL } }), stored)
+  check('probe 对已保存路由自动用凭据库里的 Key', stored.json()?.ok === true, stored.json()?.error)
+}
+
+{
   const before = registrations
   const res = fakeRes()
   await handlerFor('/save')(fakeReq({
@@ -628,6 +668,7 @@ console.log('\n[5] 客户端卡片（结构化核对：手写 React 桩）')
 function createReactStub() {
   const slots = []
   const cleanups = []
+  const effectDeps = []
   let cursor = 0
   return {
     slots,
@@ -646,8 +687,25 @@ function createReactStub() {
         slots[index] = typeof value === 'function' ? value(slots[index]) : value
       }]
     },
-    useEffect(callback) {
-      cleanups.push(callback())
+    /**
+     * 支持依赖数组的 useEffect（真实 React 的核心语义之一）。
+     *
+     * 不支持 deps 会让每次渲染都重跑 effect：卡片里「拉 /status」的 effect 就会在
+     * 每次渲染后异步回来、把用户刚编辑的草稿覆盖掉——测试会以为功能坏了，其实是桩不对。
+     * 依赖不变就跳过；`undefined` 依赖（没传数组）每次重跑，与 React 一致。
+     */
+    useEffect(callback, deps) {
+      const index = cursor++
+      const previous = effectDeps[index]
+      const firstRun = previous === undefined
+      const always = deps === undefined
+      const changed = firstRun || always || deps.length !== previous.deps.length || deps.some((value, at) => value !== previous.deps[at])
+      effectDeps[index] = { deps: deps ?? null }
+      if (!changed) return
+      if (previous?.cleanup !== undefined) previous.cleanup?.()
+      const cleanup = callback()
+      effectDeps[index].cleanup = cleanup
+      cleanups.push(cleanup)
     },
     useCallback(callback) {
       return callback
@@ -982,15 +1040,15 @@ function findButton(node, text) {
   return findNode(node, (candidate) => candidate.type === 'button' && collectText(candidate).join('').includes(text))
 }
 
-/** 收集「模型行」（label 里含 `cn:` 的那些）。 */
-function collectModelRows(node, out = []) {
+/** 收集「模型行」（label 里含模型 id 前缀的那些）。 */
+function collectModelRows(node, token = 'cn:', out = []) {
   if (node === null || typeof node !== 'object') return out
   if (Array.isArray(node)) {
-    for (const child of node) collectModelRows(child, out)
+    for (const child of node) collectModelRows(child, token, out)
     return out
   }
-  if (node.type === 'label' && collectText(node).join(' ').includes('cn:')) out.push(node)
-  for (const child of node.children ?? []) collectModelRows(child, out)
+  if (node.type === 'label' && collectText(node).join(' ').includes(token)) out.push(node)
+  for (const child of node.children ?? []) collectModelRows(child, token, out)
   return out
 }
 
@@ -1055,11 +1113,111 @@ const checkboxOf = (label) => findNode(label, (candidate) => candidate.type === 
   mount.render({ view: 'page' })
   await new Promise((resolve) => setTimeout(resolve, 30))
   const view = mount.render({ view: 'page' })
-  check('没有模型表时提示先去保存/刷新', /还没有模型表/u.test(collectText(view).join(' | ')), collectText(view).join(' | ').match(/还没有模型表[^|]*/u)?.[0])
+  check('没有模型表时提示去点「拉取模型」', /点「拉取模型」/u.test(collectText(view).join(' | ')), collectText(view).join(' | ').match(/填好 URL[^|]*/u)?.[0])
   check('没有模型表时不显示全选/全不选', findButton(view, '全不选') === undefined)
 }
 
 globalThis.fetch = realFetch
+
+console.log('\n[5d] 客户端卡片：点模型选择就地拉取（含错误提示）')
+
+const noRouteStatus = {
+  ok: true,
+  configFile: 'C:/Users/x/.dsh/.workbuddy2api-connect.json',
+  refreshMinutes: 30,
+  updatedAt: '2026-10-19T13:30:00.000Z',
+  routes: [],
+}
+
+let probeMode = 'ok'
+const probeCalls = []
+const realFetchAgain = globalThis.fetch
+globalThis.fetch = async (url, options) => {
+  const target = String(url)
+  if (!target.includes('/probe')) return { ok: true, status: 200, json: async () => noRouteStatus }
+  const body = JSON.parse(options.body)
+  probeCalls.push(body)
+  if (typeof body.baseURL !== 'string' || body.baseURL.trim().length === 0) {
+    return { ok: false, status: 400, json: async () => ({ ok: false, error: '请先填 URL（网关的 OpenAI 兼容基地址）' }) }
+  }
+  if (probeMode === 'fail') {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: false, url: `${body.baseURL}/models`, error: 'HTTP 401 Unauthorized——网关拒绝了这把 Key（不对、过期或没有权限）：{"error":{"code":"invalid_api_key"}}' }),
+    }
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      url: `${body.baseURL}/models`,
+      models: 2,
+      catalog: [
+        { id: 'gw:alpha', name: 'Alpha', contextWindow: 256_000, maxTokens: 8_192, reasoning: true, efforts: ['high'], off: false, images: false, rate: null },
+        { id: 'gw:beta', name: 'Beta', contextWindow: 32_000, maxTokens: 1_024, reasoning: false, efforts: [], off: false, images: false, rate: null },
+      ],
+    }),
+  }
+}
+
+{
+  const mount = mountFresh({ get: () => undefined })
+  mount.render({ view: 'page' })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let view = mount.render({ view: 'page' })
+
+  // 新建一条空路由（模拟「刚加了一行」）
+  findButton(view, '添加路由')?.props.onClick()
+  view = mount.render({ view: 'page' })
+  check('新路由显示「拉取模型」按钮（而不是空白）',
+    findButton(view, '拉取模型（按当前 URL / Key 去网关取）') !== undefined,
+    collectText(view).join(' | ').match(/拉取模型[^|]*/u)?.[0])
+
+  // 没填 URL 就点 → 宿主拒绝，界面把原因显示出来
+  findButton(view, '拉取模型')?.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  view = mount.render({ view: 'page' })
+  check('没填 URL 点拉取 → 卡片里显示失败原因',
+    /拉取模型失败：请先填 URL/u.test(collectText(view).join(' | ')),
+    collectText(view).join(' | ').match(/拉取模型失败[^|]*/u)?.[0])
+
+  // 填 URL 后再点 → 拉到模型清单
+  const urlInput = findNode(view, (candidate) => candidate.type === 'input' && candidate.props.placeholder === 'http://127.0.0.1:7863/v1')
+  check('找得到 URL 输入框', urlInput !== undefined)
+  urlInput?.props.onChange({ target: { value: 'http://gw.test/v1' } })
+  view = mount.render({ view: 'page' })
+  check('改 URL 后旧的失败提示被清掉', !/拉取模型失败/u.test(collectText(view).join(' | ')))
+
+  findButton(view, '拉取模型')?.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  view = mount.render({ view: 'page' })
+  check('点拉取后按当前 URL 请求宿主', probeCalls.at(-1)?.baseURL === 'http://gw.test/v1', JSON.stringify(probeCalls.at(-1)))
+  check('拉到的模型立刻列出来', collectModelRows(view, 'gw:').length === 2, `行数 ${collectModelRows(view, 'gw:').length}`)
+  check('标题变成「模型选择（启用 2 / 共 2）」', findButton(view, '模型选择（启用 2 / 共 2）') !== undefined)
+  check('标明这是现拉的、还没保存', /现拉，尚未保存/u.test(collectText(view).join(' | ')))
+
+  // 网关报错（密钥不对）→ 错误原文显示
+  probeMode = 'fail'
+  findButton(view, '重新拉取')?.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  view = mount.render({ view: 'page' })
+  const errorText = collectText(view).join(' | ')
+  check('网关报 401 时把原因显示在卡片里',
+    /拉取模型失败：HTTP 401/u.test(errorText) && /invalid_api_key/u.test(errorText),
+    errorText.match(/拉取模型失败[^|]*/u)?.[0])
+  check('失败时不残留旧清单', collectModelRows(view, 'gw:').length === 0, `行数 ${collectModelRows(view, 'gw:').length}`)
+
+  // 再改 URL → 回到「拉取模型」
+  probeMode = 'ok'
+  findNode(view, (candidate) => candidate.type === 'input' && candidate.props.placeholder === 'http://127.0.0.1:7863/v1')
+    ?.props.onChange({ target: { value: 'http://gw2.test/v1' } })
+  view = mount.render({ view: 'page' })
+  check('换 URL 后回到「拉取模型」入口', findButton(view, '拉取模型（按当前 URL / Key 去网关取）') !== undefined)
+}
+
+globalThis.fetch = realFetchAgain
 
 // ────────────────────────── 收尾 ──────────────────────────
 console.log('\n— 插件日志 —')
