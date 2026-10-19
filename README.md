@@ -129,13 +129,13 @@ DSH 自带的 `@deepseek-ai/dsh-llm-pi-ai` 支持手写网关路由，但在 `co
 
 ```powershell
 # 1) 从 Release 取附件（或自己 npm pack 出来的那个）放进本地插件目录
-copy dsh-workbuddy2api-connect-0.3.1.tgz "$env:USERPROFILE\.dsh\local-plugins\"
+copy dsh-workbuddy2api-connect-0.5.0.tgz "$env:USERPROFILE\.dsh\local-plugins\"
 ```
 
 2) 编辑 `%USERPROFILE%\.dsh\profiles\desktop\package.json` 两处：
 
 - `dependencies` 里加一行
-  `"dsh-workbuddy2api-connect": "file:C:/Users/<你>/.dsh/local-plugins/dsh-workbuddy2api-connect-0.3.1.tgz"`
+  `"dsh-workbuddy2api-connect": "file:C:/Users/<你>/.dsh/local-plugins/dsh-workbuddy2api-connect-0.5.0.tgz"`
 - `dsh.profile.bundles` 数组里追加 `"dsh-workbuddy2api-connect"`
 
 ```powershell
@@ -151,13 +151,13 @@ $dsh = "D:\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"   # 换�
 ### Web / TUI
 
 ```sh
-dsh plugin --profile web add https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/download/v0.3.1/dsh-workbuddy2api-connect-0.3.1.tgz
+dsh plugin --profile web add https://github.com/che246/dsh-workbuddy2api-connect/releases/download/v0.5.0/dsh-workbuddy2api-connect-0.5.0.tgz
 ```
 
 ### 从源码
 
 ```sh
-npm pack                        # → dsh-workbuddy2api-connect-0.3.1.tgz
+npm pack                        # → dsh-workbuddy2api-connect-0.5.0.tgz
 ```
 
 再按上面「桌面版」或「Web / TUI」的方式装上那个 tgz。
@@ -398,7 +398,9 @@ python tools/cut-release.py --notes FILE  # 指定发布说明文件
 - Release 正文 = `docs/release-notes-v<版本>.md` + 自动追加的安装章节（桌面版 / Web / TUI 两条路径）；说明里自己写了 `## 安装` 就不重复追加
 - 附件就是 `npm pack` 出来的 tgz，安装可以直接指它（见上面「Web / TUI」）
 
-已发布版本：**[v0.3.1](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.3.1)**（适配 dsh 0.2.1-rc.2，去掉 dsh peer 版本钉）、**[v0.3.0](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.3.0)**（界面新增「命令与思考：完全展开」开关）、**[v0.2.1](https://github.com/che246/DeepSeek-Harness-workbuddy2api-panel/releases/tag/v0.2.1)**。tag 指向发布内容那一次提交；之后的文档/工具提交不重打 tag。
+仓库地址：**https://github.com/che246/dsh-workbuddy2api-connect**（2026-10 由 `DeepSeek-Harness-workbuddy2api-panel` 改名，旧链接会 301 到新地址）。
+
+已发布版本：**[v0.5.0](https://github.com/che246/dsh-workbuddy2api-connect/releases/tag/v0.5.0)**（点模型选择即按当前 URL/Key 现拉清单，错误原因显示在卡片里）、**[v0.4.0](https://github.com/che246/dsh-workbuddy2api-connect/releases/tag/v0.4.0)**（面板上勾选要启用的模型）、**[v0.3.1](https://github.com/che246/dsh-workbuddy2api-connect/releases/tag/v0.3.1)**（适配 dsh 0.2.1-rc.2，去掉 dsh peer 版本钉）、**[v0.3.0](https://github.com/che246/dsh-workbuddy2api-connect/releases/tag/v0.3.0)**（界面新增「命令与思考：完全展开」开关）、**[v0.2.1](https://github.com/che246/dsh-workbuddy2api-connect/releases/tag/v0.2.1)**。tag 指向发布内容那一次提交；之后的文档/工具提交不重打 tag。
 
 ## 许可
 

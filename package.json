@@ -55,5 +55,13 @@
       "optional": true
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/che246/dsh-workbuddy2api-connect.git"
+  },
+  "homepage": "https://github.com/che246/dsh-workbuddy2api-connect#readme",
+  "bugs": {
+    "url": "https://github.com/che246/dsh-workbuddy2api-connect/issues"
+  },
   "license": "MIT"
 }
